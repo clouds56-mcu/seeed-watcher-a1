@@ -134,3 +134,15 @@ Two approximately five-second device windows during this change measured:
 These are local runtime measurements under the observed scene, not a guaranteed
 frame rate. The 20 FPS target is not fully reached; rendering is the remaining
 bottleneck. Wall-time measurements include task scheduling and contention.
+
+## Numeric display
+
+Overall dBFS is formatted as integer tenths using the actual LVGL formatter, so
+it does not require `LV_SPRINTF_USE_FLOAT`. Negative fractional values such as
+`-0.1` retain their sign. Boot checks verify representative strings and emit only
+a fixed success code; deployment requires that code.
+
+```sh
+cc -std=c11 -Wall -Wextra -Werror -DLV_CONF_SKIP -Imain -Ivendor main/ui_format.c vendor/lvgl/src/misc/lv_printf.c tests/ui_format_test.c -o /tmp/watcher-format-test
+/tmp/watcher-format-test
+```

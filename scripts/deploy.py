@@ -66,20 +66,21 @@ def deploy(port):
     device.rts = False
     deadline = time.monotonic() + 25
     buffer = b''
-    ready = running = signal = rendered = timing = controls = failed = False
+    ready = running = signal = rendered = timing = controls = formatted = failed = False
     perf_reports = 0
-    perf_pattern = re.compile(rb'PERF_V5 elapsed_ms=([0-9]+) frames=([0-9]+) fft_avg_us=([0-9]+) fft_max_us=([0-9]+) ui_wait_avg_us=([0-9]+) ui_wait_max_us=([0-9]+) render_avg_ms=([0-9]+) render_max_ms=([0-9]+) pixels_avg=([0-9]+)')
+    perf_pattern = re.compile(rb'PERF_V6 elapsed_ms=([0-9]+) frames=([0-9]+) fft_avg_us=([0-9]+) fft_max_us=([0-9]+) ui_wait_avg_us=([0-9]+) ui_wait_max_us=([0-9]+) render_avg_ms=([0-9]+) render_max_ms=([0-9]+) pixels_avg=([0-9]+)')
     while time.monotonic() < deadline:
       buffer = (buffer + device.read(1024))[-4096:]
       while b'\n' in buffer:
         line, buffer = buffer.split(b'\n', 1)
         line = line.rstrip(b'\r')
-        ready |= line == b'SOUND_METER_READY_V5'
-        running |= line == b'SOUND_METER_RUNNING_V5'
-        signal |= line == b'SOUND_METER_SIGNAL_V5'
-        rendered |= line == b'SPECTRUM_RENDERED_V5'
-        timing |= line == b'SPECTRUM_TIMING_OK_V5'
-        controls |= line == b'SPECTRUM_CONTROLS_READY_V5'
+        ready |= line == b'SOUND_METER_READY_V6'
+        running |= line == b'SOUND_METER_RUNNING_V6'
+        signal |= line == b'SOUND_METER_SIGNAL_V6'
+        rendered |= line == b'SPECTRUM_RENDERED_V6'
+        timing |= line == b'SPECTRUM_TIMING_OK_V6'
+        controls |= line == b'SPECTRUM_CONTROLS_READY_V6'
+        formatted |= line == b'DISPLAY_FORMAT_READY_V6'
         failed |= line == b'SOUND_METER_MIC_ERROR'
         match = perf_pattern.fullmatch(line)
         if match:
@@ -87,7 +88,7 @@ def deploy(port):
           perf_reports += 1
       if failed:
         raise RuntimeError('DEMO_MIC_ERROR')
-      if ready and running and signal and rendered and timing and controls and perf_reports >= 2:
+      if ready and running and signal and rendered and timing and controls and formatted and perf_reports >= 2:
         print('DEMO_SPECTRUM_CONTROLS_SIGNAL_TIMING_VERIFIED', flush=True)
         return
   raise RuntimeError('DEMO_RUNTIME_UNCONFIRMED')

@@ -11,6 +11,7 @@
 #include "sound_level.h"
 #include "controls.h"
 #include "sensitivity.h"
+#include "ui_format.h"
 
 static lv_obj_t *value_label, *status_label, *sensitivity_label;
 static lv_obj_t *bars[SPECTRUM_BANDS];
@@ -44,7 +45,7 @@ static void report_performance(int64_t elapsed_us) {
   render_pixels = 0;
   portEXIT_CRITICAL(&render_lock);
   // Only aggregate timing/counts, never PCM, spectrum or input values.
-  printf("PERF_V5 elapsed_ms=%lu frames=%lu fft_avg_us=%lu fft_max_us=%lu ui_wait_avg_us=%lu ui_wait_max_us=%lu render_avg_ms=%lu render_max_ms=%lu pixels_avg=%lu\n",
+  printf("PERF_V6 elapsed_ms=%lu frames=%lu fft_avg_us=%lu fft_max_us=%lu ui_wait_avg_us=%lu ui_wait_max_us=%lu render_avg_ms=%lu render_max_ms=%lu pixels_avg=%lu\n",
     (unsigned long)(elapsed_us / 1000), (unsigned long)frames,
     (unsigned long)(fft_us / 100), (unsigned long)fft_max_us,
     (unsigned long)(ui_wait_us / 100), (unsigned long)ui_wait_max_us,
@@ -145,7 +146,11 @@ static bool update_ui(float dbfs, bool failed, bool no_signal) {
   int tenths = failed ? INT_MIN + 1 : lroundf(dbfs * 10);
   if (tenths != previous_tenths) {
     if (failed) lv_label_set_text(value_label, "--.-");
-    else lv_label_set_text_fmt(value_label, "%.1f", (double)tenths / 10);
+    else {
+      char text[16];
+      ui_format_dbfs(text, sizeof(text), tenths);
+      lv_label_set_text(value_label, text);
+    }
     previous_tenths = tenths;
   }
   static const char *previous_status;
@@ -180,6 +185,12 @@ void app_main(void) {
   bsp_lvgl_get_disp()->driver->monitor_cb = render_monitor;
   lvgl_port_unlock();
   controls_init();
+  char format_check[16];
+  ui_format_dbfs(format_check, sizeof(format_check), -421);
+  assert(strcmp(format_check, "-42.1") == 0);
+  ui_format_dbfs(format_check, sizeof(format_check), -1);
+  assert(strcmp(format_check, "-0.1") == 0);
+  puts("DISPLAY_FORMAT_READY_V6");
   esp_codec_dev_handle_t mic = bsp_audio_codec_microphone_init();
   // Generic mono defaults to LEFT in esp_codec_dev; the mic is on RIGHT.
   esp_codec_dev_sample_info_t format = {
@@ -193,7 +204,7 @@ void app_main(void) {
     return;
   }
   spectrum_init(&spectrum);
-  puts("SOUND_METER_READY_V5");
+  puts("SOUND_METER_READY_V6");
   int16_t samples[800]; // 50 ms, reused immediately; never exported.
   float smoothed = -90;
   unsigned blocks = 0;
@@ -229,11 +240,11 @@ void app_main(void) {
     memset(samples, 0, sizeof(samples));
     if (update_ui(smoothed, false, flat_blocks >= 40) && spectrum_ready) ++spectrum_frames;
     if (++blocks % 100 == 0) {
-      puts("SOUND_METER_RUNNING_V5");
-      puts(window_has_signal ? "SOUND_METER_SIGNAL_V5" : "SOUND_METER_FLAT_V5");
+      puts("SOUND_METER_RUNNING_V6");
+      puts(window_has_signal ? "SOUND_METER_SIGNAL_V6" : "SOUND_METER_FLAT_V6");
       if (spectrum_frames >= 95) {
-        puts("SPECTRUM_RENDERED_V5");
-        puts(esp_timer_get_time() - report_start <= 6500000 ? "SPECTRUM_TIMING_OK_V5" : "SPECTRUM_TIMING_SLOW_V5");
+        puts("SPECTRUM_RENDERED_V6");
+        puts(esp_timer_get_time() - report_start <= 6500000 ? "SPECTRUM_TIMING_OK_V6" : "SPECTRUM_TIMING_SLOW_V6");
       }
       report_performance(esp_timer_get_time() - report_start);
       spectrum_frames = 0;
