@@ -15,6 +15,7 @@
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lvgl_port.h"
+#include "lvgl_port_task_delay.h"
 
 #include "lvgl.h"
 
@@ -805,15 +806,11 @@ static void lvgl_port_task(void *arg)
             task_delay_ms = lv_timer_handler();
             lvgl_port_unlock();
         }
-        if ((task_delay_ms > lvgl_port_ctx.task_max_sleep_ms) || (1 == task_delay_ms))
-        {
-            task_delay_ms = lvgl_port_ctx.task_max_sleep_ms;
-        }
-        else if (task_delay_ms < 1)
-        {
-            task_delay_ms = 1;
-        }
-        vTaskDelay(pdMS_TO_TICKS(task_delay_ms));
+        task_delay_ms = lvgl_port_task_delay_ms(task_delay_ms, lvgl_port_ctx.task_max_sleep_ms);
+        // A one-ms timer deadline is urgent, not an idle request. On a 100-Hz
+        // scheduler sleep at least one tick instead of spinning at high priority.
+        TickType_t delay_ticks = pdMS_TO_TICKS(task_delay_ms);
+        vTaskDelay(delay_ticks ? delay_ticks : 1);
     }
 
     /* Close task */

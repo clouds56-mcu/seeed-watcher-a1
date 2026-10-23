@@ -64,18 +64,21 @@ int spectrum_push(spectrum_t *s, const int16_t *samples, size_t count,
   fft(s);
   float power[SPECTRUM_BANDS] = {0};
   const float resolution = (float)SPECTRUM_RATE / SPECTRUM_SIZE;
-  for (size_t k = 1; k <= SPECTRUM_SIZE / 2; ++k) {
-    float energy = (s->real[k] * s->real[k] + s->imag[k] * s->imag[k]) /
-                   (SPECTRUM_SIZE * s->window_power);
-    if (k != SPECTRUM_SIZE / 2) energy *= 2;
-    // Fractional overlap avoids empty bands at the low-frequency end.
-    float left = (k - 0.5f) * resolution, right = (k + 0.5f) * resolution;
-    float width = resolution;
-    if (k == SPECTRUM_SIZE / 2) {
-      right = SPECTRUM_RATE / 2;
-      width *= 0.5f;
-    }
-    for (size_t band = 0; band < SPECTRUM_BANDS; ++band) {
+  for (size_t band = 0; band < SPECTRUM_BANDS; ++band) {
+    // Visit only bins touching this band, rather than testing every bin against
+    // all 32 bands. Keep fractional boundary weighting and Nyquist handling.
+    int first = (int)fmaxf(1, floorf(s->edges[band] / resolution - 0.5f));
+    int last = (int)fminf(SPECTRUM_SIZE / 2, ceilf(s->edges[band + 1] / resolution + 0.5f));
+    for (int k = first; k <= last; ++k) {
+      float energy = (s->real[k] * s->real[k] + s->imag[k] * s->imag[k]) /
+                     (SPECTRUM_SIZE * s->window_power);
+      if (k != SPECTRUM_SIZE / 2) energy *= 2;
+      float left = (k - 0.5f) * resolution, right = (k + 0.5f) * resolution;
+      float width = resolution;
+      if (k == SPECTRUM_SIZE / 2) {
+        right = SPECTRUM_RATE / 2;
+        width *= 0.5f;
+      }
       float overlap = fminf(right, s->edges[band + 1]) - fmaxf(left, s->edges[band]);
       if (overlap > 0) power[band] += energy * overlap / width;
     }

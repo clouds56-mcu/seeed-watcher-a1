@@ -57,7 +57,12 @@ that will be overwritten in OTA slot 0
 and boot selection privately under ignored `.local/`, writes and verifies only
 the application and OTA selection, and checks fixed startup/heartbeat, non-flat signal, spectrum UI update and
 processing-rate and control-driver initialization codes (at least 95 spectrum updates per 100 hops in 6.5 seconds).
-These checks confirm the processing/UI path, not an independent visual inspection.
+The script also projects two aggregate performance reports: elapsed milliseconds,
+completed LVGL refreshes, average/maximum FFT and UI-lock wall times, average/maximum
+LVGL render milliseconds and average rendered pixel count. No pixels or audio values
+are exported. Submitted UI updates are separate from completed refreshes; use
+`frames / elapsed_seconds` to assess actual rendering. These checks are not an
+independent visual inspection.
 It preserves the bootloader, partition table, factory configuration and other
 data partitions. It replaces the application in OTA slot 0 and selects it on boot.
 Backups can contain private data: do not preview, upload, or commit them.
@@ -94,3 +99,38 @@ Sensitivity mapping checks:
 cc -std=c11 -Wall -Wextra -Werror -Imain main/sensitivity.c tests/sensitivity_test.c -lm -o /tmp/watcher-sensitivity-test
 /tmp/watcher-sensitivity-test
 ```
+
+## Rendering performance
+
+Each radial line uses a fixed local bounding box rather than a canvas-sized box.
+Only changed integer bar lengths, labels and RGB colors are updated. The global
+`LV_INV_BUF_SIZE=128` build definition keeps all LVGL users on the same display
+structure layout and prevents 32 bars plus labels overflowing the dirty-area list.
+Two 40-row internal DMA buffers replace the full-screen PSRAM draw buffers.
+Performance compiler optimization is enabled. LVGL is pinned to core 1; the audio
+and spectrum loop stays on the ESP-IDF main task on core 0.
+
+The LVGL port preserves urgent timer deadlines and always yields at least one
+FreeRTOS tick. Its maximum idle sleep is 10 ms: this port has no invalidation wakeup,
+so a 500 ms idle delay otherwise stalls newly submitted frames after LVGL pauses
+its refresh timer. The spectrum integrator visits only bins overlapping each band.
+The fractional-bin weighting and RMS normalization are unchanged.
+
+Timer regression check:
+
+```sh
+cc -std=c11 -Wall -Wextra -Werror -Ivendor/esp_lvgl_port/include tests/lvgl_task_delay_test.c -o /tmp/watcher-delay-test
+/tmp/watcher-delay-test
+```
+
+Two approximately five-second device windows during this change measured:
+
+| Metric | Original | Optimized, split cores |
+| --- | --- | --- |
+| Completed LVGL refresh rate | ~1.7 FPS | ~17 FPS |
+| Spectrum processing average wall time | ~32 ms | ~4.9 ms |
+| LVGL rendering average time | ~85 ms | ~50 ms |
+
+These are local runtime measurements under the observed scene, not a guaranteed
+frame rate. The 20 FPS target is not fully reached; rendering is the remaining
+bottleneck. Wall-time measurements include task scheduling and contention.
