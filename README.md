@@ -18,6 +18,17 @@ Purple RGB indicates a microphone error or exactly flat input lasting two second
 official BSP. PCM and FFT data stay in reused device RAM. No Wi-Fi/BLE, camera,
 SD or cloud services are initialized, and no audio or spectrum values are logged.
 
+## Knob sensitivity
+
+Turn clockwise to raise spectrum display sensitivity, counterclockwise to lower
+it. Each detent changes display gain by 3 dB, limited to -24 through +24 dB.
+`SENS +0 dB` is the default. A single short click restores it. Settings are RAM-only
+and return to default on reboot. Overall dBFS, RGB thresholds, microphone gain
+and FFT measurements do not change. Digital silence stays collapsed at all settings.
+The physical encoder and debounced button use their own callbacks; LVGL encoder
+input remains disabled to prevent duplicate ownership. Input callbacks update
+only a small synchronized gain value, and the audio/UI task renders it.
+
 ## Build
 
 Use ESP-IDF v5.2.3 with the ESP32-S3 toolchain, activate its `export.sh`, then:
@@ -45,7 +56,7 @@ The script verifies the supported factory partition layout, backs up all sectors
 that will be overwritten in OTA slot 0
 and boot selection privately under ignored `.local/`, writes and verifies only
 the application and OTA selection, and checks fixed startup/heartbeat, non-flat signal, spectrum UI update and
-processing-rate codes (at least 95 spectrum updates per 100 hops in 6.5 seconds).
+processing-rate and control-driver initialization codes (at least 95 spectrum updates per 100 hops in 6.5 seconds).
 These checks confirm the processing/UI path, not an independent visual inspection.
 It preserves the bootloader, partition table, factory configuration and other
 data partitions. It replaces the application in OTA slot 0 and selects it on boot.
@@ -75,4 +86,11 @@ Spectrum host checks (silence, DC, tones across the range, power normalization,
 ```sh
 cc -std=c11 -Wall -Wextra -Werror -Imain main/spectrum.c tests/spectrum_test.c -lm -o /tmp/watcher-spectrum-test
 /tmp/watcher-spectrum-test
+```
+
+Sensitivity mapping checks:
+
+```sh
+cc -std=c11 -Wall -Wextra -Werror -Imain main/sensitivity.c tests/sensitivity_test.c -lm -o /tmp/watcher-sensitivity-test
+/tmp/watcher-sensitivity-test
 ```

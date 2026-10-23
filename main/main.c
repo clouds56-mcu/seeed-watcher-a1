@@ -7,8 +7,10 @@
 #include "esp_log.h"
 #include "sensecap-watcher.h"
 #include "sound_level.h"
+#include "controls.h"
+#include "sensitivity.h"
 
-static lv_obj_t *value_label, *status_label;
+static lv_obj_t *value_label, *status_label, *sensitivity_label;
 static lv_obj_t *bars[SPECTRUM_BANDS];
 static lv_point_t points[SPECTRUM_BANDS][2];
 static float direction_x[SPECTRUM_BANDS], direction_y[SPECTRUM_BANDS];
@@ -55,8 +57,8 @@ static void create_ui(void) {
   value_label = label("--.-", 174, &lv_font_montserrat_32);
   label("dBFS", 216, &lv_font_montserrat_16);
   status_label = label("MIC STARTING", 247, &lv_font_montserrat_16);
-  label("31 Hz - 8 kHz", 279, &lv_font_montserrat_16);
-  label("32 BANDS", 301, LV_FONT_DEFAULT);
+  sensitivity_label = label("SENS +0 dB", 279, &lv_font_montserrat_16);
+  label("CLICK: RESET", 301, LV_FONT_DEFAULT);
 }
 
 static bool update_ui(float dbfs, bool failed, bool no_signal) {
@@ -66,8 +68,10 @@ static bool update_ui(float dbfs, bool failed, bool no_signal) {
   if (no_signal) color = 0xa855f7;
   ESP_ERROR_CHECK(bsp_rgb_set((color >> 16 & 255) / 8, (color >> 8 & 255) / 8, (color & 255) / 8));
   if (!lvgl_port_lock(100)) return false;
+  int gain_db = controls_gain_db();
+  lv_label_set_text_fmt(sensitivity_label, "SENS %+d dB", gain_db);
   for (size_t i = 0; i < SPECTRUM_BANDS; ++i) {
-    float level = failed || no_signal ? 0 : fmaxf(0, fminf(1, (band_levels[i] + 72) / 72));
+    float level = failed || no_signal ? 0 : sensitivity_level(band_levels[i], gain_db);
     // Invalidate old and new bounds when mutating LVGL's retained point storage.
     lv_obj_invalidate(bars[i]);
     radial_points(points[i], i, 125 + 65 * level);
@@ -90,6 +94,7 @@ void app_main(void) {
   assert(lvgl_port_lock(0));
   create_ui();
   lvgl_port_unlock();
+  controls_init();
   esp_codec_dev_handle_t mic = bsp_audio_codec_microphone_init();
   // Generic mono defaults to LEFT in esp_codec_dev; the mic is on RIGHT.
   esp_codec_dev_sample_info_t format = {
@@ -103,7 +108,7 @@ void app_main(void) {
     return;
   }
   spectrum_init(&spectrum);
-  puts("SOUND_METER_READY_V3");
+  puts("SOUND_METER_READY_V4");
   int16_t samples[800]; // 50 ms, reused immediately; never exported.
   float smoothed = -90;
   unsigned blocks = 0;
@@ -135,11 +140,11 @@ void app_main(void) {
     memset(samples, 0, sizeof(samples));
     if (update_ui(smoothed, false, flat_blocks >= 40) && spectrum_ready) ++spectrum_frames;
     if (++blocks % 100 == 0) {
-      puts("SOUND_METER_RUNNING_V3");
-      puts(window_has_signal ? "SOUND_METER_SIGNAL_V3" : "SOUND_METER_FLAT_V3");
+      puts("SOUND_METER_RUNNING_V4");
+      puts(window_has_signal ? "SOUND_METER_SIGNAL_V4" : "SOUND_METER_FLAT_V4");
       if (spectrum_frames >= 95) {
-        puts("SPECTRUM_RENDERED_V3");
-        puts(esp_timer_get_time() - report_start <= 6500000 ? "SPECTRUM_TIMING_OK_V3" : "SPECTRUM_TIMING_SLOW_V3");
+        puts("SPECTRUM_RENDERED_V4");
+        puts(esp_timer_get_time() - report_start <= 6500000 ? "SPECTRUM_TIMING_OK_V4" : "SPECTRUM_TIMING_SLOW_V4");
       }
       spectrum_frames = 0;
       report_start = esp_timer_get_time();
