@@ -2,7 +2,9 @@
 
 SenseCAP Watcher W1-A demo: 16 kHz mono microphone input, DC-corrected RMS,
 asymmetric attack/release smoothing, screen volume bar and green/amber/red RGB.
-Purple indicates a microphone error. No Wi-Fi/BLE, camera, SD or cloud services
+Purple indicates a microphone error or an exactly flat input lasting two seconds
+(`NO SIGNAL`). The microphone explicitly selects right I²S slot 1, matching the
+official BSP. A generic mono request defaults to left slot 0 in the codec library. No Wi-Fi/BLE, camera, SD or cloud services
 are initialized. PCM stays in a reused device RAM buffer and is never logged.
 
 The display reports relative dBFS, not calibrated sound pressure dB SPL. The bar
@@ -35,7 +37,7 @@ python scripts/deploy.py --port /dev/cu.YOUR_ESP32_PORT
 The script verifies the supported factory partition layout, backs up all sectors
 that will be overwritten in OTA slot 0
 and boot selection privately under ignored `.local/`, writes and verifies only
-the application and OTA selection, and checks fixed demo startup/heartbeat codes.
+the application and OTA selection, and checks fixed startup/heartbeat and non-flat signal codes.
 It preserves the bootloader, partition table, factory configuration and other
 data partitions. It replaces the application in OTA slot 0 and selects it on boot.
 Backups can contain private data: do not preview, upload, or commit them.

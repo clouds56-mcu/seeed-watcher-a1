@@ -65,16 +65,17 @@ def deploy(port):
     device.rts = False
     deadline = time.monotonic() + 25
     buffer = b''
-    ready = running = failed = False
+    ready = running = signal = failed = False
     while time.monotonic() < deadline:
       buffer = (buffer + device.read(1024))[-4096:]
-      ready |= b'SOUND_METER_READY_V1' in buffer
-      running |= b'SOUND_METER_RUNNING_V1' in buffer
+      ready |= b'SOUND_METER_READY_V2' in buffer
+      running |= b'SOUND_METER_RUNNING_V2' in buffer
+      signal |= b'SOUND_METER_SIGNAL_V2' in buffer
       failed |= b'SOUND_METER_MIC_ERROR' in buffer
       if failed:
         raise RuntimeError('DEMO_MIC_ERROR')
-      if ready and running:
-        print('DEMO_READY_AND_SAMPLING', flush=True)
+      if ready and running and signal:
+        print('DEMO_READY_SAMPLING_AND_SIGNAL', flush=True)
         return
   raise RuntimeError('DEMO_RUNTIME_UNCONFIRMED')
 
