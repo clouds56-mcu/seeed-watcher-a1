@@ -8,6 +8,12 @@ set(EXTRA_COMPONENT_DIRS
 )
 # Preserve the upstream factory project's legacy logging compile options.
 add_compile_options(-Wno-error=format= -Wno-format)
-add_compile_definitions(LV_INV_BUF_SIZE=128)
+add_compile_definitions(
+  LV_INV_BUF_SIZE=128
+  LV_MEM_CUSTOM_INCLUDE="${WATCHER_ROOT}/factory/lvgl_heap.h"
+  LV_MEM_CUSTOM_ALLOC=watcher_lv_alloc
+  LV_MEM_CUSTOM_REALLOC=watcher_lv_realloc
+  LV_MEM_CUSTOM_FREE=heap_caps_free
+)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(factory_spectrum)

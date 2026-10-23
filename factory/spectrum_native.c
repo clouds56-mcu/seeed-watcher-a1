@@ -20,7 +20,6 @@
 #endif
 
 lv_obj_t *spectrum_menu_button;
-lv_obj_t *spectrum_services_button;
 static TaskHandle_t worker;
 static portMUX_TYPE state_lock = portMUX_INITIALIZER_UNLOCKED;
 static bool active, capturing, close_requested, services_ready, swallow_release;
@@ -33,7 +32,7 @@ static spectrum_t spectrum;
 static sound_average_t average;
 static float bands[SPECTRUM_BANDS], smoothed;
 static unsigned frames;
-static bool request_open, request_services;
+static bool request_open;
 
 bool spectrum_native_active(void) {
   portENTER_CRITICAL(&state_lock);
@@ -81,9 +80,6 @@ bool spectrum_native_long_release(void) {
   return consumed;
 }
 
-static void offline_long_press(void) { spectrum_native_long_press(); }
-static void offline_long_release(void) { spectrum_native_long_release(); }
-
 static void input_event(lv_event_t *event) {
   lv_event_code_t code = lv_event_get_code(event);
   portENTER_CRITICAL(&state_lock);
@@ -101,13 +97,12 @@ static void input_event(lv_event_t *event) {
 }
 
 static void menu_event(lv_event_t *event) {
-  lv_obj_t *target = lv_event_get_target(event);
   if (lv_event_get_code(event) == LV_EVENT_FOCUSED) {
-    lv_label_set_text(ui_maintitle, target == spectrum_menu_button ? "Sound\nSpectrum" : "Start\nServices");
-  } else if (lv_event_get_code(event) == LV_EVENT_CLICKED && worker) {
+    lv_obj_set_y(ui_maintitle, 0);
+    lv_label_set_text(ui_maintitle, "Sound\nSpectrum");
+  } else if (lv_event_get_code(event) == LV_EVENT_CLICKED && worker && spectrum_native_services_ready()) {
     portENTER_CRITICAL(&state_lock);
-    if (target == spectrum_menu_button) request_open = true;
-    else request_services = true;
+    request_open = true;
     portEXIT_CRITICAL(&state_lock);
     xTaskNotifyGive(worker);
   }
@@ -134,13 +129,6 @@ static lv_obj_t *menu_item(const char *text) {
 
 void spectrum_native_attach_home(void) {
   spectrum_menu_button = menu_item("SND");
-  spectrum_services_button = menu_item("ONLINE");
-  lv_obj_t *stock[] = {ui_mainbtn1, ui_mainbtn2, ui_mainbtn3, ui_mainbtn4};
-  if (!services_ready) {
-    for (size_t i = 0; i < 4; ++i) lv_obj_add_state(stock[i], LV_STATE_DISABLED);
-  } else {
-    lv_obj_add_state(spectrum_services_button, LV_STATE_DISABLED);
-  }
 }
 
 static bool enter_spectrum(void) {
@@ -267,28 +255,9 @@ static void native_task(void *unused) {
   while (true) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     portENTER_CRITICAL(&state_lock);
-    bool open = request_open, online = request_services;
-    request_open = request_services = false;
+    bool open = request_open;
+    request_open = false;
     portEXIT_CRITICAL(&state_lock);
-    if (online && !services_ready) {
-      lvgl_port_lock(0);
-      lv_obj_t *offline_home = ui_Page_Home;
-      lv_group_t *offline_group = g_main;
-      lv_obj_add_state(spectrum_services_button, LV_STATE_DISABLED);
-      lvgl_port_unlock();
-      factory_services_start();
-      portENTER_CRITICAL(&state_lock);
-      services_ready = true;
-      portEXIT_CRITICAL(&state_lock);
-      lvgl_port_lock(0);
-      lv_obj_del(offline_home);
-      lv_group_del(offline_group);
-      lv_obj_t *stock[] = {ui_mainbtn1, ui_mainbtn2, ui_mainbtn3, ui_mainbtn4};
-      for (size_t i = 0; i < 4; ++i) lv_obj_clear_state(stock[i], LV_STATE_DISABLED);
-      lv_obj_add_state(spectrum_services_button, LV_STATE_DISABLED);
-      lvgl_port_unlock();
-      puts("NATIVE_FACTORY_SERVICES_ENABLED_V1");
-    }
     if (!open) continue;
     if (!enter_spectrum()) {
       leave_spectrum();
@@ -333,8 +302,9 @@ static void native_task(void *unused) {
 #if CONFIG_WATCHER_NATIVE_SELF_TEST
 static void lifecycle_test(void *unused) {
   for (int round = 0; round < 2; ++round) {
-    assert(!spectrum_native_services_ready());
+    assert(spectrum_native_services_ready());
     lvgl_port_lock(0);
+    assert(lv_group_get_obj_count(g_main) == 5);
     assert(lv_scr_act() == ui_Page_Home);
     lv_event_send(spectrum_menu_button, LV_EVENT_CLICKED, NULL);
     lvgl_port_unlock();
@@ -381,23 +351,20 @@ static void lifecycle_test(void *unused) {
 
 void spectrum_native_bootstrap(void) {
   assert(xTaskCreatePinnedToCore(native_task, "native_spectrum", 8192, NULL, 3, &worker, 0) == pdPASS);
+  factory_services_start();
+  portENTER_CRITICAL(&state_lock);
+  services_ready = true;
+  portEXIT_CRITICAL(&state_lock);
   lvgl_port_lock(0);
-  ui_Page_Home_screen_init();
-  g_main = lv_group_create();
-  cur_drv = NULL;
-  while ((cur_drv = lv_indev_get_next(cur_drv))) {
-    if (cur_drv->driver->type == LV_INDEV_TYPE_ENCODER) break;
-  }
-  assert(cur_drv);
-  lv_group_add_obj(g_main, spectrum_menu_button);
-  lv_group_add_obj(g_main, spectrum_services_button);
-  lv_indev_set_group(cur_drv, g_main);
-  lv_group_focus_obj(spectrum_menu_button);
-  lv_scr_load(ui_Page_Home);
+  extern GroupInfo group_page_main;
+  lv_pm_open_page(g_main, &group_page_main, PM_ADD_OBJS_TO_GROUP,
+                 &ui_Page_Home, LV_SCR_LOAD_ANIM_NONE, 0, 0, &ui_Page_Home_screen_init);
+  assert(lv_group_get_obj_count(g_main) == 5);
+  lv_obj_t *stock[] = {ui_mainbtn1, ui_mainbtn2, ui_mainbtn3, ui_mainbtn4};
+  for (size_t i = 0; i < 4; ++i) assert(!lv_obj_has_state(stock[i], LV_STATE_DISABLED));
+  lv_group_focus_obj(ui_mainbtn1);
   lvgl_port_unlock();
-  bsp_set_btn_long_press_cb(offline_long_press);
-  bsp_set_btn_long_release_cb(offline_long_release);
-  puts("NATIVE_FACTORY_OFFLINE_READY_V1");
+  puts("\nNATIVE_FACTORY_MENU_READY_V2");
 #if CONFIG_WATCHER_NATIVE_SELF_TEST
   assert(xTaskCreate(lifecycle_test, "native_test", 4096, NULL, 2, NULL) == pdPASS);
 #endif

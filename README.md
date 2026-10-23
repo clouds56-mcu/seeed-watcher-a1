@@ -1,9 +1,9 @@
 # Watcher offline circular spectrum
 
 The integrated factory-menu version is in [factory/README.md](factory/README.md).
-It boots offline, opens the spectrum from `SND`, and starts original online
-services only when the user selects `ONLINE`. The instructions below describe
-the standalone firmware.
+It initializes original factory services normally, preserves all four original
+menu entries, and adds `SND`. The spectrum App processes audio locally without
+uploads. The instructions below describe the standalone firmware.
 
 SenseCAP Watcher W1-A: 32 radial frequency bars around a central overall dBFS
 reading. Frequencies increase clockwise from the top, from 31.25 Hz to 8 kHz.

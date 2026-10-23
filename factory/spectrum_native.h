@@ -3,7 +3,6 @@
 #include "lvgl.h"
 
 extern lv_obj_t *spectrum_menu_button;
-extern lv_obj_t *spectrum_services_button;
 void spectrum_native_attach_home(void);
 void spectrum_native_bootstrap(void);
 bool spectrum_native_active(void);
