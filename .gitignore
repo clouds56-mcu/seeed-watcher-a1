@@ -3,4 +3,9 @@ sdkconfig
 sdkconfig.old
 managed_components/
 .local/
+.deps/
+factory/build/
+factory/sdkconfig
+factory/sdkconfig.old
+factory/managed_components/
 *.pyc

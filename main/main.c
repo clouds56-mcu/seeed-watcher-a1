@@ -11,14 +11,9 @@
 #include "sound_level.h"
 #include "controls.h"
 #include "sensitivity.h"
+#include "spectrum_display.h"
 #include "ui_format.h"
 
-static lv_obj_t *value_label, *status_label, *sensitivity_label;
-static lv_obj_t *bars[SPECTRUM_BANDS];
-static lv_point_t points[SPECTRUM_BANDS][2];
-static lv_point_t origins[SPECTRUM_BANDS];
-static int last_radius[SPECTRUM_BANDS];
-static float direction_x[SPECTRUM_BANDS], direction_y[SPECTRUM_BANDS];
 static float band_levels[SPECTRUM_BANDS];
 static spectrum_t spectrum;
 
@@ -56,66 +51,8 @@ static void report_performance(int64_t elapsed_us) {
 }
 
 
-static lv_obj_t *label(const char *text, int y, const lv_font_t *font) {
-  lv_obj_t *obj = lv_label_create(lv_scr_act());
-  lv_label_set_text(obj, text);
-  lv_obj_set_style_text_font(obj, font, 0);
-  lv_obj_set_style_text_color(obj, lv_color_hex(0xe8edf5), 0);
-  lv_obj_align(obj, LV_ALIGN_TOP_MID, 0, y);
-  return obj;
-}
-
-static void radial_points(lv_point_t *p, size_t band, float radius) {
-  p[0] = (lv_point_t){lroundf(206 + 122 * direction_x[band]) - origins[band].x, lroundf(206 + 122 * direction_y[band]) - origins[band].y};
-  p[1] = (lv_point_t){lroundf(206 + radius * direction_x[band]) - origins[band].x, lroundf(206 + radius * direction_y[band]) - origins[band].y};
-}
-
-static void create_ui(void) {
-  lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0x101827), 0);
-  // Static tracks and persistent point arrays keep all 32 bars visible at silence.
-  static lv_point_t tracks[SPECTRUM_BANDS][2];
-  for (size_t i = 0; i < SPECTRUM_BANDS; ++i) {
-    float angle = -1.57079632679f + 6.28318530718f * i / SPECTRUM_BANDS;
-    direction_x[i] = cosf(angle);
-    direction_y[i] = sinf(angle);
-    int inner_x = lroundf(206 + 122 * direction_x[i]);
-    int inner_y = lroundf(206 + 122 * direction_y[i]);
-    int outer_x = lroundf(206 + 190 * direction_x[i]);
-    int outer_y = lroundf(206 + 190 * direction_y[i]);
-    origins[i] = (lv_point_t){inner_x < outer_x ? inner_x : outer_x,
-                             inner_y < outer_y ? inner_y : outer_y};
-    radial_points(tracks[i], i, 190);
-    lv_obj_t *track = lv_line_create(lv_scr_act());
-    lv_line_set_points(track, tracks[i], 2);
-    lv_obj_set_pos(track, origins[i].x, origins[i].y);
-    lv_obj_set_size(track, abs(outer_x - inner_x) + 1, abs(outer_y - inner_y) + 1);
-    lv_obj_set_style_line_color(track, lv_color_hex(0x253247), 0);
-    lv_obj_set_style_line_width(track, 8, 0);
-    lv_obj_set_style_line_rounded(track, true, 0);
-    radial_points(points[i], i, 125);
-    bars[i] = lv_line_create(lv_scr_act());
-    lv_line_set_points(bars[i], points[i], 2);
-    lv_obj_set_pos(bars[i], origins[i].x, origins[i].y);
-    lv_obj_set_size(bars[i], abs(outer_x - inner_x) + 1, abs(outer_y - inner_y) + 1);
-    last_radius[i] = 125;
-    lv_obj_set_style_line_color(bars[i], lv_color_hsv_to_rgb(155 + i * 160 / 31, 75, 95), 0);
-    lv_obj_set_style_line_width(bars[i], 8, 0);
-    lv_obj_set_style_line_rounded(bars[i], true, 0);
-    band_levels[i] = -90;
-  }
-  label("SPECTRUM", 132, &lv_font_montserrat_22);
-  value_label = label("--.-", 174, &lv_font_montserrat_32);
-  label("dBFS / 1s AVG", 216, &lv_font_montserrat_16);
-  status_label = label("MIC STARTING", 247, &lv_font_montserrat_16);
-  sensitivity_label = label("SENS +0 dB", 279, &lv_font_montserrat_16);
-  label("CLICK: RESET", 301, LV_FONT_DEFAULT);
-}
-
 static bool update_ui(float dbfs, float average_dbfs, bool failed, bool no_signal) {
-  int percent = failed ? 0 : sound_percent(dbfs);
-  uint32_t color = failed ? 0xa855f7 : percent >= 75 ? 0xf04452 : percent >= 45 ? 0xf5b942 : 0x34d399;
-  const char *status = failed ? "MIC ERROR" : no_signal ? "NO SIGNAL" : percent >= 75 ? "LOUD" : percent >= 45 ? "MODERATE" : "QUIET";
-  if (no_signal) color = 0xa855f7;
+  uint32_t color = spectrum_display_color(dbfs, failed, no_signal);
   static uint32_t previous_color = UINT32_MAX;
   if (color != previous_color) {
     ESP_ERROR_CHECK(bsp_rgb_set((color >> 16 & 255) / 8, (color >> 8 & 255) / 8, (color & 255) / 8));
@@ -127,45 +64,8 @@ static bool update_ui(float dbfs, float average_dbfs, bool failed, bool no_signa
   ui_wait_us += wait_us;
   if (wait_us > ui_wait_max_us) ui_wait_max_us = wait_us;
   if (!locked) return false;
-  int gain_db = controls_gain_db();
-  static int previous_gain = INT_MIN;
-  if (gain_db != previous_gain) {
-    lv_label_set_text_fmt(sensitivity_label, "SENS %+d dB", gain_db);
-    previous_gain = gain_db;
-  }
-  for (size_t i = 0; i < SPECTRUM_BANDS; ++i) {
-    float level = failed || no_signal ? 0 : sensitivity_level(band_levels[i], gain_db);
-    int radius = lroundf(125 + 65 * level);
-    if (radius != last_radius[i]) {
-      radial_points(points[i], i, radius);
-      lv_line_set_points(bars[i], points[i], 2);
-      last_radius[i] = radius;
-    }
-  }
-  static int previous_tenths = INT_MIN;
-  static int64_t last_value_update;
-  static bool previous_failed;
-  int64_t now = esp_timer_get_time();
-  if (failed || failed != previous_failed || previous_tenths == INT_MIN || now - last_value_update >= 250000) {
-    int tenths = failed ? INT_MIN + 1 : lroundf(average_dbfs * 10);
-    if (tenths != previous_tenths) {
-      if (failed) lv_label_set_text(value_label, "--.-");
-      else {
-        char text[16];
-        ui_format_dbfs(text, sizeof(text), tenths);
-        lv_label_set_text(value_label, text);
-      }
-      previous_tenths = tenths;
-    }
-    last_value_update = now;
-    previous_failed = failed;
-  }
-  static const char *previous_status;
-  if (status != previous_status) {
-    lv_label_set_text(status_label, status);
-    lv_obj_set_style_text_color(status_label, lv_color_hex(color), 0);
-    previous_status = status;
-  }
+  spectrum_display_update(dbfs, average_dbfs, band_levels, controls_gain_db(),
+                          failed, no_signal, esp_timer_get_time());
   lvgl_port_unlock();
   return true;
 }
@@ -188,7 +88,8 @@ void app_main(void) {
   display.lvgl_port_cfg.task_max_sleep_ms = CONFIG_LVGL_PORT_TASK_MAX_SLEEP_MS;
   assert(bsp_lvgl_init_with_cfg(&display));
   assert(lvgl_port_lock(0));
-  create_ui();
+  for (size_t i = 0; i < SPECTRUM_BANDS; ++i) band_levels[i] = -90;
+  spectrum_display_create(lv_scr_act(), "CLICK: RESET");
   bsp_lvgl_get_disp()->driver->monitor_cb = render_monitor;
   lvgl_port_unlock();
   controls_init();

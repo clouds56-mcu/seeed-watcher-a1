@@ -2,6 +2,7 @@
 import argparse
 import os
 import re
+import selectors
 from pathlib import Path
 import struct
 import subprocess
@@ -12,13 +13,37 @@ import zlib
 
 def run_tool(port, *args):
   command = [sys.executable, '-m', 'esptool', '--chip', 'esp32s3',
-             '--port', port, '--baud', '460800', '--after', 'no_reset', *args]
-  result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-  if result.returncode:
-    raise RuntimeError('SERIAL_OPERATION_FAILED')
+             '--port', port, '--baud', '921600', '--after', 'no_reset', *args]
+  # Esptool can print device identifiers. Consume locally and project only progress.
+  environment = dict(os.environ, PYTHONUNBUFFERED='1')
+  with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                        env=environment) as process:
+    pending = b''
+    last_percent = 0
+    deadline = time.monotonic() + 900
+    with selectors.DefaultSelector() as selector:
+      selector.register(process.stdout, selectors.EVENT_READ)
+      while process.poll() is None:
+        if time.monotonic() > deadline:
+          process.kill()
+          raise RuntimeError('SERIAL_OPERATION_FAILED')
+        for key, _ in selector.select(timeout=1):
+          chunk = os.read(key.fileobj.fileno(), 4096)
+          if not chunk:
+            continue
+          pending = (pending + chunk)[-8192:]
+          for match in re.finditer(rb'\(([0-9]{1,3}) %\)', pending):
+            percent = int(match.group(1))
+            if 10 <= percent <= 100 and percent >= last_percent + 10:
+              print('SERIAL_TRANSFER_PERCENT ' + str(percent), flush=True)
+              last_percent = percent
+          # Retain a possible partial progress token, never export raw output.
+          pending = pending[-32:]
+    if process.wait():
+      raise RuntimeError('SERIAL_OPERATION_FAILED')
 
 
-def deploy(port):
+def flash_application(port, image):
   os.umask(0o077)
   local = Path('.local') / time.strftime('backup-%Y%m%d-%H%M%S')
   local.mkdir(parents=True)
@@ -39,7 +64,7 @@ def deploy(port):
   }
   if any(entries.get(key) != value for key, value in expected.items()):
     raise RuntimeError('PARTITION_LAYOUT_UNSUPPORTED')
-  image = Path('build/watcher_sound_meter.bin')
+  image = Path(image)
   if not image.is_file() or not 0 < image.stat().st_size <= expected[b'ota_0'][3]:
     raise RuntimeError('APPLICATION_IMAGE_INVALID')
   print('PARTITION_LAYOUT_VERIFIED', flush=True)
@@ -57,6 +82,10 @@ def deploy(port):
   print('APPLICATION_FLASH_VERIFIED', flush=True)
   run_tool(port, 'write_flash', '0x10d000', str(selection))
   print('BOOT_SELECTION_VERIFIED', flush=True)
+
+
+def deploy(port):
+  flash_application(port, Path('build/watcher_sound_meter.bin'))
   # Only ROM/loader traffic is handled above. No factory application logs are exported.
   import serial
   with serial.Serial(port, 115200, timeout=0.2) as device:

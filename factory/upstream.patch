@@ -1,0 +1,516 @@
+diff --git a/examples/factory_firmware/main/CMakeLists.txt b/examples/factory_firmware/main/CMakeLists.txt
+index 6663576..e171fc3 100644
+--- a/examples/factory_firmware/main/CMakeLists.txt
++++ b/examples/factory_firmware/main/CMakeLists.txt
+@@ -47,3 +47,13 @@ if (CONFIG_ENABLE_FACTORY_FW_DEBUG_LOG)
+ endif()
+ 
+ spiffs_create_partition_image(storage ../spiffs FLASH_IN_PROJECT)
++
++target_sources(${COMPONENT_LIB} PRIVATE
++  "${WATCHER_ROOT}/factory/spectrum_native.c"
++  "${WATCHER_ROOT}/main/sound_level.c"
++  "${WATCHER_ROOT}/main/spectrum.c"
++  "${WATCHER_ROOT}/main/sensitivity.c"
++  "${WATCHER_ROOT}/main/ui_format.c"
++  "${WATCHER_ROOT}/main/spectrum_display.c"
++)
++target_include_directories(${COMPONENT_LIB} PRIVATE "${WATCHER_ROOT}/factory" "${WATCHER_ROOT}/main")
+diff --git a/examples/factory_firmware/main/Kconfig.projbuild b/examples/factory_firmware/main/Kconfig.projbuild
+index 69bae44..3586203 100644
+--- a/examples/factory_firmware/main/Kconfig.projbuild
++++ b/examples/factory_firmware/main/Kconfig.projbuild
+@@ -50,4 +50,11 @@ menu "Factory Firmware Example Configuration"
+         default n
+         help
+             Enable wake-up word and VAD detection functions, SR is still an experimental feature .
+-endmenu
+\ No newline at end of file
++endmenu
++menu "Watcher native spectrum"
++  config WATCHER_NATIVE_SELF_TEST
++    bool "Offline native spectrum lifecycle self-test"
++    default n
++    help
++      Exercise known home/spectrum screens only, without enabling factory services.
++endmenu
+diff --git a/examples/factory_firmware/main/app/app_audio_player.c b/examples/factory_firmware/main/app/app_audio_player.c
+index bb0bc1b..3655b4a 100644
+--- a/examples/factory_firmware/main/app/app_audio_player.c
++++ b/examples/factory_firmware/main/app/app_audio_player.c
+@@ -1,3 +1,4 @@
++#include "spectrum_native.h"
+ #include "app_audio_player.h"
+ #include <stdio.h>
+ #include <string.h>
+@@ -582,7 +583,8 @@ esp_err_t app_audio_player_stop(void)
+ }
+ 
+ esp_err_t app_audio_player_stream_init(size_t len)
+-{ 
++{
++    if (spectrum_native_active()) return ESP_ERR_INVALID_STATE;
+     struct app_audio_player * p_audio_player = gp_audio_player;
+     if( p_audio_player == NULL) {
+         return ESP_FAIL;
+@@ -620,6 +622,7 @@ esp_err_t app_audio_player_stream_init(size_t len)
+ 
+ esp_err_t app_audio_player_stream_start(void)
+ {
++    if (spectrum_native_active()) return ESP_ERR_INVALID_STATE;
+     struct app_audio_player * p_audio_player = gp_audio_player;
+     if( p_audio_player == NULL) {
+         return ESP_FAIL;
+@@ -749,6 +752,7 @@ int app_audio_player_stream_time_get(int len)
+ }
+ esp_err_t app_audio_player_file(void *p_filepath)
+ {
++    if (spectrum_native_active()) return ESP_ERR_INVALID_STATE;
+     struct app_audio_player * p_audio_player = gp_audio_player;
+     if( p_audio_player == NULL) {
+         return ESP_FAIL;
+@@ -773,6 +777,7 @@ esp_err_t app_audio_player_file(void *p_filepath)
+ 
+ esp_err_t app_audio_player_file_block(void *p_filepath, TickType_t xTicksToWait)
+ {
++    if (spectrum_native_active()) return ESP_ERR_INVALID_STATE;
+     struct app_audio_player * p_audio_player = gp_audio_player;
+     if( p_audio_player == NULL) {
+         return ESP_FAIL;
+@@ -795,6 +800,7 @@ esp_err_t app_audio_player_file_block(void *p_filepath, TickType_t xTicksToWait)
+ 
+ esp_err_t app_audio_player_mem(uint8_t *p_buf, size_t len, bool is_need_free)
+ {
++    if (spectrum_native_active()) return ESP_ERR_INVALID_STATE;
+     struct app_audio_player * p_audio_player = gp_audio_player;
+     if( p_audio_player == NULL) {
+         return ESP_FAIL;
+@@ -820,6 +826,7 @@ esp_err_t app_audio_player_mem(uint8_t *p_buf, size_t len, bool is_need_free)
+ 
+ esp_err_t app_audio_player_mem_block(uint8_t *p_buf, size_t len, bool is_need_free, TickType_t xTicksToWait)
+ {
++    if (spectrum_native_active()) return ESP_ERR_INVALID_STATE;
+     struct app_audio_player * p_audio_player = gp_audio_player;
+     if( p_audio_player == NULL) {
+         return ESP_FAIL;
+diff --git a/examples/factory_firmware/main/app/app_audio_recorder.c b/examples/factory_firmware/main/app/app_audio_recorder.c
+index 8cfb506..a0c8e7d 100644
+--- a/examples/factory_firmware/main/app/app_audio_recorder.c
++++ b/examples/factory_firmware/main/app/app_audio_recorder.c
+@@ -1,3 +1,4 @@
++#include "spectrum_native.h"
+ #include "app_audio_recorder.h"
+ #include <stdio.h>
+ #include <string.h>
+@@ -166,8 +167,13 @@ static void app_audio_recorder_task(void *p_arg)
+                     break;
+                 }
+ 
+-                bsp_get_feed_data(false, audio_buffer, AUDIO_RECORDER_RINGBUF_CHUNK_SIZE);
+-                if(xRingbufferSend(p_audio_recorder->rb_handle, audio_buffer, AUDIO_RECORDER_RINGBUF_CHUNK_SIZE, 0) != pdTRUE) {
++                int chunk_size = spectrum_native_active() ? 1600 : AUDIO_RECORDER_RINGBUF_CHUNK_SIZE;
++                if (bsp_get_feed_data(false, audio_buffer, chunk_size) != ESP_OK) {
++                  memset(audio_buffer, 0, chunk_size);
++                  vTaskDelay(pdMS_TO_TICKS(10));
++                  continue;
++                }
++                if(xRingbufferSend(p_audio_recorder->rb_handle, audio_buffer, chunk_size, 0) != pdTRUE) {
+                     ESP_LOGE(TAG, "xRingbufferSend failed");
+                 }
+             }
+@@ -372,6 +378,7 @@ esp_err_t app_audio_recorder_stop(void)
+ 
+ esp_err_t app_audio_recorder_stream_start(void)
+ {
++    if (!spectrum_native_audio_allowed()) return ESP_ERR_INVALID_STATE;
+     struct app_audio_recorder * p_audio_recorder = gp_audio_recorder;
+     if( p_audio_recorder == NULL) {
+         return ESP_FAIL;
+@@ -409,6 +416,7 @@ esp_err_t app_audio_recorder_stream_start(void)
+ uint8_t *app_audio_recorder_stream_recv(size_t *p_recv_len,
+                                         TickType_t xTicksToWait)
+ {
++    if (!spectrum_native_audio_allowed()) return NULL;
+     struct app_audio_recorder * p_audio_recorder = gp_audio_recorder;
+     if( p_audio_recorder == NULL) {
+         return NULL;
+@@ -429,6 +437,7 @@ esp_err_t app_audio_recorder_stream_free(uint8_t *p_data)
+ 
+ esp_err_t app_audio_recorder_stream_stop(void)
+ {
++    if (!spectrum_native_audio_allowed()) return ESP_ERR_INVALID_STATE;
+     struct app_audio_recorder * p_audio_recorder = gp_audio_recorder;
+     if( p_audio_recorder == NULL) {
+         return ESP_FAIL;
+@@ -451,6 +460,7 @@ esp_err_t app_audio_recorder_stream_stop(void)
+ 
+ esp_err_t app_audio_recorder_file_start(void *p_filepath)
+ {
++    if (!spectrum_native_audio_allowed()) return ESP_ERR_INVALID_STATE;
+     return ESP_OK;
+ }
+ 
+diff --git a/examples/factory_firmware/main/app/app_rgb.c b/examples/factory_firmware/main/app/app_rgb.c
+index 34c47c2..7eaa969 100644
+--- a/examples/factory_firmware/main/app/app_rgb.c
++++ b/examples/factory_firmware/main/app/app_rgb.c
+@@ -1,3 +1,4 @@
++#include "spectrum_native.h"
+ #include <time.h>
+ #include "esp_timer.h"
+ #include "esp_log.h"
+@@ -24,6 +25,8 @@ typedef struct
+ } rgb_status;
+ 
+ static rgb_status rgb_status_instance;
++static bool native_override;
++static uint8_t desired_r, desired_g, desired_b;
+ static TaskHandle_t task_handle = NULL;
+ static StackType_t *app_rgb_stack = NULL;
+ static StaticTask_t app_rgb_stack_buffer;
+@@ -67,7 +70,8 @@ static void __rgb_unlock( void)
+ static void __rgb_set(uint8_t r, uint8_t g, uint8_t b)
+ {
+     __rgb_lock();
+-    bsp_rgb_set(r, g, b);
++    desired_r = r; desired_g = g; desired_b = b;
++    if (!native_override) bsp_rgb_set(r, g, b);
+     __rgb_unlock();
+ }
+ 
+@@ -382,4 +386,10 @@ void app_rgb_status_set(int r, int g, int b, int mode, int step, int delay_time)
+     __data_lock();
+     set_rgb_status(r, g, b, mode, step, delay_time);
+     __data_unlock();
+-}
+\ No newline at end of file
++}
++void app_rgb_native_override(bool enable) {
++  __rgb_lock();
++  native_override = enable;
++  if (!enable) bsp_rgb_set(desired_r, desired_g, desired_b);
++  __rgb_unlock();
++}
+diff --git a/examples/factory_firmware/main/app/app_rgb.h b/examples/factory_firmware/main/app/app_rgb.h
+index 0dbd016..5b649d9 100644
+--- a/examples/factory_firmware/main/app/app_rgb.h
++++ b/examples/factory_firmware/main/app/app_rgb.h
+@@ -1,3 +1,4 @@
++#include <stdbool.h>
+ #ifndef APP_RGB_H
+ #define APP_RGB_H
+ 
+@@ -36,3 +37,5 @@ void app_rgb_status_set(int r, int g, int b, int mode, int step, int delay_time)
+ #endif
+ 
+ #endif
++
++void app_rgb_native_override(bool enable);
+diff --git a/examples/factory_firmware/main/app/app_voice_interaction.c b/examples/factory_firmware/main/app/app_voice_interaction.c
+index 7869b7d..cecb7c2 100644
+--- a/examples/factory_firmware/main/app/app_voice_interaction.c
++++ b/examples/factory_firmware/main/app/app_voice_interaction.c
+@@ -1,3 +1,4 @@
++#include "spectrum_native.h"
+ #include "app_voice_interaction.h"
+ #include <stdio.h>
+ #include <string.h>
+@@ -64,6 +65,7 @@ static void __vi_exit( struct app_voice_interaction *p_vi)
+ 
+ static void __record_start( struct app_voice_interaction *p_vi)
+ {
++    if (spectrum_native_active()) return;
+     if(p_vi->is_ota) {
+         ESP_LOGW(TAG, "not support vi on ota mode");
+         return;
+@@ -406,6 +408,10 @@ static void __status_machine_handle(struct app_voice_interaction *p_vi)
+             break;
+         }
+         case VI_STATUS_WAKE_START: {
++            if (spectrum_native_active()) {
++              p_vi->next_status = VI_STATUS_EXIT;
++              break;
++            }
+             ESP_LOGI(TAG, "VI_STATUS_WAKE_START");
+             if( !p_vi->net_flag ) {
+                 ESP_LOGI(TAG, "network not ready");
+@@ -903,6 +909,7 @@ static void app_voice_interaction_task(void *p_arg)
+ 
+ static void __long_press_event_cb(void)
+ {
++    if (spectrum_native_long_press()) return;
+     ESP_LOGI(TAG, "long_press_event_cb");
+     struct app_voice_interaction *p_vi = (struct app_voice_interaction *)gp_voice_interaction;
+     __record_start(p_vi);
+@@ -910,6 +917,7 @@ static void __long_press_event_cb(void)
+ 
+ static void __long_release_event_cb(void)
+ {
++    if (spectrum_native_long_release()) return;
+     ESP_LOGI(TAG, "long_release_event_cb");
+     struct app_voice_interaction *p_vi = (struct app_voice_interaction *)gp_voice_interaction;
+     __record_stop(p_vi);
+@@ -1329,4 +1337,18 @@ int app_vi_result_free(struct view_data_vi_result *p_ret)
+     }
+     return 0;
+ 
+-}
+\ No newline at end of file
++}
++esp_err_t app_vi_pause_for_spectrum(bool *resume_taskflow) {
++  *resume_taskflow = false;
++  if (!gp_voice_interaction) return ESP_OK;
++  struct app_voice_interaction *p_vi = gp_voice_interaction;
++  *resume_taskflow = p_vi->taskflow_pause;
++  xEventGroupClearBits(p_vi->event_group, EVENT_RECORD_START);
++  __vi_exit(p_vi);
++  for (int i = 0; i < 100; ++i) {
++    if (p_vi->cur_status == VI_STATUS_IDLE && !p_vi->is_recording &&
++        !(xEventGroupGetBits(p_vi->event_group) & EVENT_VI_EXIT)) return ESP_OK;
++    vTaskDelay(pdMS_TO_TICKS(20));
++  }
++  return ESP_ERR_TIMEOUT;
++}
+diff --git a/examples/factory_firmware/main/app/app_voice_interaction.h b/examples/factory_firmware/main/app/app_voice_interaction.h
+index a185767..cf7c124 100644
+--- a/examples/factory_firmware/main/app/app_voice_interaction.h
++++ b/examples/factory_firmware/main/app/app_voice_interaction.h
+@@ -94,3 +94,5 @@ int app_vi_result_free(struct view_data_vi_result *p_ret);
+ 
+ 
+ 
++
++esp_err_t app_vi_pause_for_spectrum(bool *resume_taskflow);
+diff --git a/examples/factory_firmware/main/idf_component.yml b/examples/factory_firmware/main/idf_component.yml
+index a3512ae..40256be 100644
+--- a/examples/factory_firmware/main/idf_component.yml
++++ b/examples/factory_firmware/main/idf_component.yml
+@@ -2,11 +2,11 @@
+ dependencies:
+   idf: ">=5.0"
+   sscma_client:
+-    override_path: "../../../components/sscma_client"
++    override_path: "../../../../../vendor/sscma_client"
+   sensecap-watcher:
+-    override_path: "../../../components/sensecap-watcher"
++    override_path: "../../../../../vendor/sensecap-watcher"
+   esp_io_expander_pca95xx_16bit:
+-    override_path: "../../../components/esp_io_expander_pca95xx_16bit"
++    override_path: "../../../../../vendor/esp_io_expander_pca95xx_16bit"
+   espressif/esp-sr: "1.7.1"
+   chmorgan/esp-audio-player: "1.0.6"
+   chmorgan/esp-file-iterator: "1.0.0"
+diff --git a/examples/factory_firmware/main/main.c b/examples/factory_firmware/main/main.c
+index 788018e..42e8dd5 100644
+--- a/examples/factory_firmware/main/main.c
++++ b/examples/factory_firmware/main/main.c
+@@ -1,3 +1,4 @@
++#include "spectrum_native.h"
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+@@ -130,8 +131,10 @@ static void __app_event_loop_handler(void *handler_args, esp_event_base_t base,
+     }
+ }
+ 
+-void board_init(void)
++static void board_online_init(void)
+ {
++    bsp_exp_io_set_level(BSP_PWR_AI_CHIP | BSP_PWR_SDCARD | BSP_PWR_GROVE, 1);
++    vTaskDelay(pdMS_TO_TICKS(100));
+     sscma_client_handle_t sscma_client;
+ 
+     // nvs key-value storage
+@@ -143,10 +146,7 @@ void board_init(void)
+     {
+         bsp_sdcard_init_default();
+     }
+-    lv_disp_t *lvgl_disp = bsp_lvgl_init();
+-    assert(lvgl_disp != NULL);
+-    bsp_rgb_init();
+-    bsp_codec_init();
++
+ 
+     sscma_client = bsp_sscma_client_init();
+     if (sscma_client)
+@@ -167,9 +167,7 @@ void app_init(void)
+ {
+     ESP_ERROR_CHECK(esp_event_loop_create_default());
+ 
+-    app_audio_player_init();
+-    app_audio_recorder_init();
+-    app_rgb_init();
++
+     app_device_info_init();
+     app_sensecraft_init();
+     app_ota_init();
+@@ -183,9 +181,9 @@ void app_init(void)
+     app_sensor_init();
+ }
+ 
+-void task_app_init(void *p_arg)
++void factory_services_start(void)
+ {
+-    board_init();
++    board_online_init();
+     view_init();
+ 
+     app_init();
+@@ -194,7 +192,30 @@ void task_app_init(void *p_arg)
+     esp_event_handler_register_with(app_event_loop_handle, VIEW_EVENT_BASE, VIEW_EVENT_SHUTDOWN, __app_event_loop_handler, NULL);
+     esp_event_handler_register_with(app_event_loop_handle, VIEW_EVENT_BASE, VIEW_EVENT_REBOOT, __app_event_loop_handler, NULL);
+ 
+-    vTaskDelete(NULL);
++}
++
++void task_app_init(void *p_arg)
++{
++  assert(bsp_io_expander_init());
++  ESP_ERROR_CHECK(bsp_exp_io_set_level(BSP_PWR_AI_CHIP | BSP_PWR_SDCARD | BSP_PWR_GROVE, 0));
++  bsp_display_cfg_t display = {
++    .lvgl_port_cfg = ESP_LVGL_PORT_INIT_CONFIG(),
++    .buffer_size = 412 * 40,
++    .double_buffer = true,
++    .flags = {.buff_dma = true, .buff_spiram = false},
++  };
++  display.lvgl_port_cfg.task_stack = 10240;
++  display.lvgl_port_cfg.task_priority = 4;
++  display.lvgl_port_cfg.task_affinity = 1;
++  display.lvgl_port_cfg.task_max_sleep_ms = 5;
++  assert(bsp_lvgl_init_with_cfg(&display));
++  ESP_ERROR_CHECK(bsp_rgb_init());
++  ESP_ERROR_CHECK(bsp_codec_init());
++  ESP_ERROR_CHECK(app_audio_player_init());
++  ESP_ERROR_CHECK(app_audio_recorder_init());
++  ESP_ERROR_CHECK(app_rgb_init());
++  spectrum_native_bootstrap();
++  vTaskDelete(NULL);
+ }
+ 
+ #ifdef CONFIG_HEAP_TASK_TRACKING
+diff --git a/examples/factory_firmware/main/task_flow_engine/src/tf.c b/examples/factory_firmware/main/task_flow_engine/src/tf.c
+index e8a0f4e..dfb680c 100644
+--- a/examples/factory_firmware/main/task_flow_engine/src/tf.c
++++ b/examples/factory_firmware/main/task_flow_engine/src/tf.c
+@@ -1,3 +1,4 @@
++#include "spectrum_native.h"
+ #include "tf.h"
+ #include <string.h>
+ #include <stdlib.h>
+@@ -375,7 +376,7 @@ static void __tf_engine_task(void *p_arg)
+             xEventGroupSetBits(gp_engine->event_group, EVENT_PAUSE_DONE);
+         }
+ 
+-        if( (bits & EVENT_RESUME)  != 0 && pause_flag ) {
++        if( !spectrum_native_active() && (bits & EVENT_RESUME) != 0 && pause_flag ) {
+             ESP_LOGI(TAG, "EVENT_RESUME");
+             pause_flag = false;
+             ret = __run(p_engine);
+@@ -388,7 +389,7 @@ static void __tf_engine_task(void *p_arg)
+             }
+         }
+         
+-        if( ( bits & EVENT_RESTART ) != 0  &&  run_flag) {
++        if( !spectrum_native_active() && (bits & EVENT_RESTART) != 0 && run_flag) {
+             ESP_LOGI(TAG, "EVENT_RESTART");
+             __stop(p_engine);
+             ret = __run(p_engine);
+@@ -401,7 +402,7 @@ static void __tf_engine_task(void *p_arg)
+             }
+         }
+ 
+-        if( xQueueReceive(p_engine->queue_handle, &flow, ( TickType_t ) 10 ) == pdPASS ) {
++        if( !spectrum_native_active() && xQueueReceive(p_engine->queue_handle, &flow, ( TickType_t ) 10) == pdPASS ) {
+ 
+             ESP_LOGI(TAG, "RECV NEW TASK");
+             if(run_flag) {
+@@ -535,6 +536,7 @@ err:
+ 
+ esp_err_t tf_engine_run(void)
+ {
++    if (spectrum_native_active()) return ESP_ERR_INVALID_STATE;
+     assert(gp_engine);
+     xEventGroupSetBits(gp_engine->event_group, EVENT_START); //TODO
+     return ESP_OK;
+@@ -549,6 +551,7 @@ esp_err_t tf_engine_stop(void)
+ 
+ esp_err_t tf_engine_restart(void)
+ {
++    if (spectrum_native_active()) return ESP_ERR_INVALID_STATE;
+     assert(gp_engine);
+     xEventGroupSetBits(gp_engine->event_group, EVENT_RESTART);
+     return ESP_OK;
+@@ -575,6 +578,7 @@ esp_err_t tf_engine_pause_block(TickType_t xTicksToWait)
+ 
+ esp_err_t tf_engine_resume(void)
+ {
++    if (spectrum_native_active()) return ESP_ERR_INVALID_STATE;
+     assert(gp_engine);
+     xEventGroupSetBits(gp_engine->event_group, EVENT_RESUME);
+     return ESP_OK;
+@@ -582,6 +586,7 @@ esp_err_t tf_engine_resume(void)
+ 
+ esp_err_t tf_engine_flow_set(const char *p_str, size_t len)
+ {
++    if (spectrum_native_active()) return ESP_ERR_INVALID_STATE;
+     assert(gp_engine);
+     esp_err_t ret = ESP_OK;
+     tf_flow_data_t flow;
+diff --git a/examples/factory_firmware/main/view/ui/screens/ui_Page_Home.c b/examples/factory_firmware/main/view/ui/screens/ui_Page_Home.c
+index 881d9f3..0b29a48 100644
+--- a/examples/factory_firmware/main/view/ui/screens/ui_Page_Home.c
++++ b/examples/factory_firmware/main/view/ui/screens/ui_Page_Home.c
+@@ -1,3 +1,4 @@
++#include "spectrum_native.h"
+ // This file was generated by SquareLine Studio
+ // SquareLine Studio version: SquareLine Studio 1.4.2
+ // LVGL version: 8.3.6
+@@ -278,4 +279,5 @@ void ui_Page_Home_screen_init(void)
+     lv_obj_add_event_cb(ui_mainbtn4, ui_event_mainbtn4, LV_EVENT_ALL, NULL);
+     lv_obj_add_event_cb(ui_Page_Home, ui_event_Page_Home, LV_EVENT_ALL, NULL);
+ 
++    spectrum_native_attach_home();
+ }
+diff --git a/examples/factory_firmware/main/view/ui/ui.c b/examples/factory_firmware/main/view/ui/ui.c
+index 2e27179..2d72a4b 100644
+--- a/examples/factory_firmware/main/view/ui/ui.c
++++ b/examples/factory_firmware/main/view/ui/ui.c
+@@ -1,3 +1,4 @@
++#include "spectrum_native.h"
+ // This file was generated by SquareLine Studio
+ // SquareLine Studio version: SquareLine Studio 1.4.2
+ // LVGL version: 8.3.6
+@@ -828,6 +829,7 @@ void ui_event_virbtn2(lv_event_t * e)
+ }
+ void ui_event_Page_Home(lv_event_t * e)
+ {
++    if (!spectrum_native_services_ready() && lv_event_get_code(e) == LV_EVENT_GESTURE) return;
+     lv_event_code_t event_code = lv_event_get_code(e);
+     lv_obj_t * target = lv_event_get_target(e);
+     if(event_code == LV_EVENT_GESTURE &&  lv_indev_get_gesture_dir(lv_indev_get_act()) == LV_DIR_TOP) {
+diff --git a/examples/factory_firmware/main/view/ui_manager/pm.c b/examples/factory_firmware/main/view/ui_manager/pm.c
+index 4a0db48..593d15d 100644
+--- a/examples/factory_firmware/main/view/ui_manager/pm.c
++++ b/examples/factory_firmware/main/view/ui_manager/pm.c
+@@ -1,3 +1,4 @@
++#include "spectrum_native.h"
+ #include "pm.h"
+ #include "animation.h"
+ #include "ui/ui.h"
+@@ -54,6 +55,7 @@ static void printGroup(GroupInfo *groupInfo) {
+ // Function to open page and add group
+ void lv_pm_open_page(lv_group_t * group, GroupInfo *groupInfo, pm_operation_t operation, lv_obj_t **target, lv_scr_load_anim_t fademode, int spd, int delay, void (*target_init)(void))
+ {
++    if (spectrum_native_active()) return;
+     static lv_obj_t * focused_obj;
+     if (g_page_record.g_curfocused_obj != NULL)
+     {
+@@ -123,7 +125,7 @@ static void lv_pm_obj_group(lv_group_t * group, GroupInfo *groupInfo)
+ void initGroup()
+ {
+     // define objects array
+-    lv_obj_t * main_objects[]           = {ui_mainbtn1, ui_mainbtn2, ui_mainbtn3, ui_mainbtn4};
++    lv_obj_t * main_objects[]           = {ui_mainbtn1, ui_mainbtn2, ui_mainbtn3, ui_mainbtn4, spectrum_menu_button, spectrum_services_button};
+     lv_obj_t * template_objects[]       = {ui_menubtn1, ui_menubtn2, ui_menubtn3, ui_menubtn4};
+     lv_obj_t * notask_objects[]         = {ui_curtask1b};
+     lv_obj_t * extension_objects[]      = {ui_extensionbubble2, ui_extensionbubble3, ui_extensionbubble4};
