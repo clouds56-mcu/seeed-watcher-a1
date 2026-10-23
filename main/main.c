@@ -45,7 +45,7 @@ static void report_performance(int64_t elapsed_us) {
   render_pixels = 0;
   portEXIT_CRITICAL(&render_lock);
   // Only aggregate timing/counts, never PCM, spectrum or input values.
-  printf("PERF_V6 elapsed_ms=%lu frames=%lu fft_avg_us=%lu fft_max_us=%lu ui_wait_avg_us=%lu ui_wait_max_us=%lu render_avg_ms=%lu render_max_ms=%lu pixels_avg=%lu\n",
+  printf("PERF_V7 elapsed_ms=%lu frames=%lu fft_avg_us=%lu fft_max_us=%lu ui_wait_avg_us=%lu ui_wait_max_us=%lu render_avg_ms=%lu render_max_ms=%lu pixels_avg=%lu\n",
     (unsigned long)(elapsed_us / 1000), (unsigned long)frames,
     (unsigned long)(fft_us / 100), (unsigned long)fft_max_us,
     (unsigned long)(ui_wait_us / 100), (unsigned long)ui_wait_max_us,
@@ -105,13 +105,13 @@ static void create_ui(void) {
   }
   label("SPECTRUM", 132, &lv_font_montserrat_22);
   value_label = label("--.-", 174, &lv_font_montserrat_32);
-  label("dBFS", 216, &lv_font_montserrat_16);
+  label("dBFS / 1s AVG", 216, &lv_font_montserrat_16);
   status_label = label("MIC STARTING", 247, &lv_font_montserrat_16);
   sensitivity_label = label("SENS +0 dB", 279, &lv_font_montserrat_16);
   label("CLICK: RESET", 301, LV_FONT_DEFAULT);
 }
 
-static bool update_ui(float dbfs, bool failed, bool no_signal) {
+static bool update_ui(float dbfs, float average_dbfs, bool failed, bool no_signal) {
   int percent = failed ? 0 : sound_percent(dbfs);
   uint32_t color = failed ? 0xa855f7 : percent >= 75 ? 0xf04452 : percent >= 45 ? 0xf5b942 : 0x34d399;
   const char *status = failed ? "MIC ERROR" : no_signal ? "NO SIGNAL" : percent >= 75 ? "LOUD" : percent >= 45 ? "MODERATE" : "QUIET";
@@ -143,15 +143,22 @@ static bool update_ui(float dbfs, bool failed, bool no_signal) {
     }
   }
   static int previous_tenths = INT_MIN;
-  int tenths = failed ? INT_MIN + 1 : lroundf(dbfs * 10);
-  if (tenths != previous_tenths) {
-    if (failed) lv_label_set_text(value_label, "--.-");
-    else {
-      char text[16];
-      ui_format_dbfs(text, sizeof(text), tenths);
-      lv_label_set_text(value_label, text);
+  static int64_t last_value_update;
+  static bool previous_failed;
+  int64_t now = esp_timer_get_time();
+  if (failed || failed != previous_failed || previous_tenths == INT_MIN || now - last_value_update >= 250000) {
+    int tenths = failed ? INT_MIN + 1 : lroundf(average_dbfs * 10);
+    if (tenths != previous_tenths) {
+      if (failed) lv_label_set_text(value_label, "--.-");
+      else {
+        char text[16];
+        ui_format_dbfs(text, sizeof(text), tenths);
+        lv_label_set_text(value_label, text);
+      }
+      previous_tenths = tenths;
     }
-    previous_tenths = tenths;
+    last_value_update = now;
+    previous_failed = failed;
   }
   static const char *previous_status;
   if (status != previous_status) {
@@ -190,7 +197,7 @@ void app_main(void) {
   assert(strcmp(format_check, "-42.1") == 0);
   ui_format_dbfs(format_check, sizeof(format_check), -1);
   assert(strcmp(format_check, "-0.1") == 0);
-  puts("DISPLAY_FORMAT_READY_V6");
+  puts("DISPLAY_FORMAT_READY_V7");
   esp_codec_dev_handle_t mic = bsp_audio_codec_microphone_init();
   // Generic mono defaults to LEFT in esp_codec_dev; the mic is on RIGHT.
   esp_codec_dev_sample_info_t format = {
@@ -199,14 +206,15 @@ void app_main(void) {
   };
   if (!mic || esp_codec_dev_open(mic, &format) != ESP_CODEC_DEV_OK ||
       esp_codec_dev_set_in_gain(mic, 27.0f) != ESP_CODEC_DEV_OK) {
-    update_ui(-90, true, false);
+    update_ui(-90, -90, true, false);
     puts("SOUND_METER_MIC_ERROR");
     return;
   }
   spectrum_init(&spectrum);
-  puts("SOUND_METER_READY_V6");
+  puts("SOUND_METER_READY_V7");
   int16_t samples[800]; // 50 ms, reused immediately; never exported.
   float smoothed = -90;
+  sound_average_t average = {0};
   unsigned blocks = 0;
   unsigned flat_blocks = 0;
   bool window_has_signal = false;
@@ -216,7 +224,8 @@ void app_main(void) {
     int result = esp_codec_dev_read(mic, samples, sizeof(samples));
     if (result != ESP_CODEC_DEV_OK) {
       memset(samples, 0, sizeof(samples));
-      update_ui(-90, true, false);
+      average = (sound_average_t){0};
+      update_ui(-90, -90, true, false);
       puts("SOUND_METER_MIC_ERROR");
       vTaskDelay(pdMS_TO_TICKS(100));
       continue;
@@ -225,7 +234,9 @@ void app_main(void) {
     for (size_t i = 1; i < 800; ++i) varying |= samples[i] != samples[0];
     flat_blocks = varying ? 0 : flat_blocks < 40 ? flat_blocks + 1 : 40;
     window_has_signal |= varying;
-    smoothed = sound_smooth(smoothed, sound_dbfs(samples, 800));
+    float current_dbfs = sound_dbfs(samples, 800);
+    smoothed = sound_smooth(smoothed, current_dbfs);
+    float average_dbfs = sound_average_push(&average, current_dbfs);
     float bands[SPECTRUM_BANDS];
     int64_t fft_start = esp_timer_get_time();
     bool spectrum_ready = spectrum_push(&spectrum, samples, 800, bands);
@@ -238,13 +249,13 @@ void app_main(void) {
       }
     }
     memset(samples, 0, sizeof(samples));
-    if (update_ui(smoothed, false, flat_blocks >= 40) && spectrum_ready) ++spectrum_frames;
+    if (update_ui(smoothed, average_dbfs, false, flat_blocks >= 40) && spectrum_ready) ++spectrum_frames;
     if (++blocks % 100 == 0) {
-      puts("SOUND_METER_RUNNING_V6");
-      puts(window_has_signal ? "SOUND_METER_SIGNAL_V6" : "SOUND_METER_FLAT_V6");
+      puts("SOUND_METER_RUNNING_V7");
+      puts(window_has_signal ? "SOUND_METER_SIGNAL_V7" : "SOUND_METER_FLAT_V7");
       if (spectrum_frames >= 95) {
-        puts("SPECTRUM_RENDERED_V6");
-        puts(esp_timer_get_time() - report_start <= 6500000 ? "SPECTRUM_TIMING_OK_V6" : "SPECTRUM_TIMING_SLOW_V6");
+        puts("SPECTRUM_RENDERED_V7");
+        puts(esp_timer_get_time() - report_start <= 6500000 ? "SPECTRUM_TIMING_OK_V7" : "SPECTRUM_TIMING_SLOW_V7");
       }
       report_performance(esp_timer_get_time() - report_start);
       spectrum_frames = 0;

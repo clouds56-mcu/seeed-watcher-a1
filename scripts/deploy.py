@@ -68,19 +68,19 @@ def deploy(port):
     buffer = b''
     ready = running = signal = rendered = timing = controls = formatted = failed = False
     perf_reports = 0
-    perf_pattern = re.compile(rb'PERF_V6 elapsed_ms=([0-9]+) frames=([0-9]+) fft_avg_us=([0-9]+) fft_max_us=([0-9]+) ui_wait_avg_us=([0-9]+) ui_wait_max_us=([0-9]+) render_avg_ms=([0-9]+) render_max_ms=([0-9]+) pixels_avg=([0-9]+)')
+    perf_pattern = re.compile(rb'PERF_V7 elapsed_ms=([0-9]+) frames=([0-9]+) fft_avg_us=([0-9]+) fft_max_us=([0-9]+) ui_wait_avg_us=([0-9]+) ui_wait_max_us=([0-9]+) render_avg_ms=([0-9]+) render_max_ms=([0-9]+) pixels_avg=([0-9]+)')
     while time.monotonic() < deadline:
       buffer = (buffer + device.read(1024))[-4096:]
       while b'\n' in buffer:
         line, buffer = buffer.split(b'\n', 1)
         line = line.rstrip(b'\r')
-        ready |= line == b'SOUND_METER_READY_V6'
-        running |= line == b'SOUND_METER_RUNNING_V6'
-        signal |= line == b'SOUND_METER_SIGNAL_V6'
-        rendered |= line == b'SPECTRUM_RENDERED_V6'
-        timing |= line == b'SPECTRUM_TIMING_OK_V6'
-        controls |= line == b'SPECTRUM_CONTROLS_READY_V6'
-        formatted |= line == b'DISPLAY_FORMAT_READY_V6'
+        ready |= line == b'SOUND_METER_READY_V7'
+        running |= line == b'SOUND_METER_RUNNING_V7'
+        signal |= line == b'SOUND_METER_SIGNAL_V7'
+        rendered |= line == b'SPECTRUM_RENDERED_V7'
+        timing |= line == b'SPECTRUM_TIMING_OK_V7'
+        controls |= line == b'SPECTRUM_CONTROLS_READY_V7'
+        formatted |= line == b'DISPLAY_FORMAT_READY_V7'
         failed |= line == b'SOUND_METER_MIC_ERROR'
         match = perf_pattern.fullmatch(line)
         if match:

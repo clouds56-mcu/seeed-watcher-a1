@@ -63,7 +63,7 @@ void controls_init(void) {
   button = iot_button_create(&button_config);
   assert(button);
   ESP_ERROR_CHECK(iot_button_register_cb(button, BUTTON_SINGLE_CLICK, reset_gain, NULL));
-  puts("SPECTRUM_CONTROLS_READY_V6");
+  puts("SPECTRUM_CONTROLS_READY_V7");
 }
 
 int controls_gain_db(void) {

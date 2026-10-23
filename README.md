@@ -3,7 +3,10 @@
 SenseCAP Watcher W1-A: 32 radial frequency bars around a central overall dBFS
 reading. Frequencies increase clockwise from the top, from 31.25 Hz to 8 kHz.
 Each bar measures total power in its logarithmic band (not power per Hz), with
-an independent -72–0 dBFS scale. Central dBFS uses DC-corrected full-band RMS.
+an independent -72–0 dBFS scale. Central dBFS uses a one-second moving average of DC-corrected full-band RMS power
+(20 blocks of 50 ms), published at most every 250 ms. Average linear power before
+converting to dBFS; do not average dB numbers. Startup uses available blocks, and
+read failures clear history. Spectrum bars and RGB retain their fast response.
 RGB reflects overall sound level: amber at -33 dBFS and red at -15 dBFS.
 These are relative digital levels, not calibrated dB SPL.
 
@@ -145,4 +148,12 @@ a fixed success code; deployment requires that code.
 ```sh
 cc -std=c11 -Wall -Wextra -Werror -DLV_CONF_SKIP -Imain -Ivendor main/ui_format.c vendor/lvgl/src/misc/lv_printf.c tests/ui_format_test.c -o /tmp/watcher-format-test
 /tmp/watcher-format-test
+```
+
+Moving-average checks (startup, linear-power averaging, window eviction, silence
+and a half-power mixture):
+
+```sh
+cc -std=c11 -Wall -Wextra -Werror -Imain main/sound_level.c tests/sound_average_test.c -lm -o /tmp/watcher-average-test
+/tmp/watcher-average-test
 ```
