@@ -1,15 +1,22 @@
-# Watcher offline sound meter
+# Watcher offline circular spectrum
 
-SenseCAP Watcher W1-A demo: 16 kHz mono microphone input, DC-corrected RMS,
-asymmetric attack/release smoothing, screen volume bar and green/amber/red RGB.
-Purple indicates a microphone error or an exactly flat input lasting two seconds
+SenseCAP Watcher W1-A: 32 radial frequency bars around a central overall dBFS
+reading. Frequencies increase clockwise from the top, from 31.25 Hz to 8 kHz.
+Each bar measures total power in its logarithmic band (not power per Hz), with
+an independent -72–0 dBFS scale. Central dBFS uses DC-corrected full-band RMS.
+RGB reflects overall sound level: amber at -33 dBFS and red at -15 dBFS.
+These are relative digital levels, not calibrated dB SPL.
+
+The 16 kHz microphone feeds a 2048-sample sliding FFT with an 800-sample hop
+(50 ms, target 20 updates/sec). Hann window power normalization preserves RMS
+energy. Fractional bin overlap prevents empty low bands; the lowest bands share
+7.8125 Hz FFT resolution, so they are not independent precision measurements.
+Bars use fast attack and slow release, a cyan-to-purple gradient and dim tracks.
+
+Purple RGB indicates a microphone error or exactly flat input lasting two seconds
 (`NO SIGNAL`). The microphone explicitly selects right I²S slot 1, matching the
-official BSP. A generic mono request defaults to left slot 0 in the codec library. No Wi-Fi/BLE, camera, SD or cloud services
-are initialized. PCM stays in a reused device RAM buffer and is never logged.
-
-The display reports relative dBFS, not calibrated sound pressure dB SPL. The bar
-maps -60 to 0 dBFS onto 0–100%; amber starts at 45%, red at 75%. Microphone gain
-is fixed at 27 dB. These thresholds are for demonstration, not noise compliance.
+official BSP. PCM and FFT data stay in reused device RAM. No Wi-Fi/BLE, camera,
+SD or cloud services are initialized, and no audio or spectrum values are logged.
 
 ## Build
 
@@ -37,7 +44,9 @@ python scripts/deploy.py --port /dev/cu.YOUR_ESP32_PORT
 The script verifies the supported factory partition layout, backs up all sectors
 that will be overwritten in OTA slot 0
 and boot selection privately under ignored `.local/`, writes and verifies only
-the application and OTA selection, and checks fixed startup/heartbeat and non-flat signal codes.
+the application and OTA selection, and checks fixed startup/heartbeat, non-flat signal, spectrum UI update and
+processing-rate codes (at least 95 spectrum updates per 100 hops in 6.5 seconds).
+These checks confirm the processing/UI path, not an independent visual inspection.
 It preserves the bootloader, partition table, factory configuration and other
 data partitions. It replaces the application in OTA slot 0 and selects it on boot.
 Backups can contain private data: do not preview, upload, or commit them.
@@ -58,4 +67,12 @@ initializer is compiled only when touch input is enabled.
 ```sh
 cc -std=c11 -Wall -Wextra -Werror -Imain main/sound_level.c tests/sound_level_test.c -lm -o /tmp/watcher-sound-test
 /tmp/watcher-sound-test
+```
+
+Spectrum host checks (silence, DC, tones across the range, power normalization,
+6 dB amplitude change, overlapping windows and Nyquist):
+
+```sh
+cc -std=c11 -Wall -Wextra -Werror -Imain main/spectrum.c tests/spectrum_test.c -lm -o /tmp/watcher-spectrum-test
+/tmp/watcher-spectrum-test
 ```

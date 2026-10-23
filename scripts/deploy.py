@@ -65,17 +65,19 @@ def deploy(port):
     device.rts = False
     deadline = time.monotonic() + 25
     buffer = b''
-    ready = running = signal = failed = False
+    ready = running = signal = rendered = timing = failed = False
     while time.monotonic() < deadline:
       buffer = (buffer + device.read(1024))[-4096:]
-      ready |= b'SOUND_METER_READY_V2' in buffer
-      running |= b'SOUND_METER_RUNNING_V2' in buffer
-      signal |= b'SOUND_METER_SIGNAL_V2' in buffer
+      ready |= b'SOUND_METER_READY_V3' in buffer
+      running |= b'SOUND_METER_RUNNING_V3' in buffer
+      signal |= b'SOUND_METER_SIGNAL_V3' in buffer
+      rendered |= b'SPECTRUM_RENDERED_V3' in buffer
+      timing |= b'SPECTRUM_TIMING_OK_V3' in buffer
       failed |= b'SOUND_METER_MIC_ERROR' in buffer
       if failed:
         raise RuntimeError('DEMO_MIC_ERROR')
-      if ready and running and signal:
-        print('DEMO_READY_SAMPLING_AND_SIGNAL', flush=True)
+      if ready and running and signal and rendered and timing:
+        print('DEMO_SPECTRUM_SIGNAL_AND_TIMING_VERIFIED', flush=True)
         return
   raise RuntimeError('DEMO_RUNTIME_UNCONFIRMED')
 

@@ -1,11 +1,19 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
+#include "esp_timer.h"
+#include "spectrum.h"
 #include "esp_log.h"
 #include "sensecap-watcher.h"
 #include "sound_level.h"
 
-static lv_obj_t *bar, *value_label, *status_label;
+static lv_obj_t *value_label, *status_label;
+static lv_obj_t *bars[SPECTRUM_BANDS];
+static lv_point_t points[SPECTRUM_BANDS][2];
+static float direction_x[SPECTRUM_BANDS], direction_y[SPECTRUM_BANDS];
+static float band_levels[SPECTRUM_BANDS];
+static spectrum_t spectrum;
 
 static lv_obj_t *label(const char *text, int y, const lv_font_t *font) {
   lv_obj_t *obj = lv_label_create(lv_scr_act());
@@ -16,35 +24,61 @@ static lv_obj_t *label(const char *text, int y, const lv_font_t *font) {
   return obj;
 }
 
-static void create_ui(void) {
-  lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0x101827), 0);
-  label("OFFLINE SOUND", 65, &lv_font_montserrat_22);
-  value_label = label("Starting...", 119, &lv_font_montserrat_32);
-  bar = lv_bar_create(lv_scr_act());
-  lv_obj_set_size(bar, 300, 42);
-  lv_obj_align(bar, LV_ALIGN_TOP_MID, 0, 185);
-  lv_bar_set_range(bar, 0, 100);
-  lv_obj_set_style_bg_color(bar, lv_color_hex(0x29364b), LV_PART_MAIN);
-  status_label = label("MIC STARTING", 249, &lv_font_montserrat_22);
-  label("Relative level / dBFS", 295, &lv_font_montserrat_16);
-  label("Local processing only", 322, &lv_font_montserrat_16);
+static void radial_points(lv_point_t *p, size_t band, float radius) {
+  p[0] = (lv_point_t){lroundf(206 + 122 * direction_x[band]), lroundf(206 + 122 * direction_y[band])};
+  p[1] = (lv_point_t){lroundf(206 + radius * direction_x[band]), lroundf(206 + radius * direction_y[band])};
 }
 
-static void update_ui(float dbfs, bool failed, bool no_signal) {
+static void create_ui(void) {
+  lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0x101827), 0);
+  // Static tracks and persistent point arrays keep all 32 bars visible at silence.
+  static lv_point_t tracks[SPECTRUM_BANDS][2];
+  for (size_t i = 0; i < SPECTRUM_BANDS; ++i) {
+    float angle = -1.57079632679f + 6.28318530718f * i / SPECTRUM_BANDS;
+    direction_x[i] = cosf(angle);
+    direction_y[i] = sinf(angle);
+    radial_points(tracks[i], i, 190);
+    lv_obj_t *track = lv_line_create(lv_scr_act());
+    lv_line_set_points(track, tracks[i], 2);
+    lv_obj_set_style_line_color(track, lv_color_hex(0x253247), 0);
+    lv_obj_set_style_line_width(track, 8, 0);
+    lv_obj_set_style_line_rounded(track, true, 0);
+    radial_points(points[i], i, 125);
+    bars[i] = lv_line_create(lv_scr_act());
+    lv_line_set_points(bars[i], points[i], 2);
+    lv_obj_set_style_line_color(bars[i], lv_color_hsv_to_rgb(155 + i * 160 / 31, 75, 95), 0);
+    lv_obj_set_style_line_width(bars[i], 8, 0);
+    lv_obj_set_style_line_rounded(bars[i], true, 0);
+    band_levels[i] = -90;
+  }
+  label("SPECTRUM", 132, &lv_font_montserrat_22);
+  value_label = label("--.-", 174, &lv_font_montserrat_32);
+  label("dBFS", 216, &lv_font_montserrat_16);
+  status_label = label("MIC STARTING", 247, &lv_font_montserrat_16);
+  label("31 Hz - 8 kHz", 279, &lv_font_montserrat_16);
+  label("32 BANDS", 301, LV_FONT_DEFAULT);
+}
+
+static bool update_ui(float dbfs, bool failed, bool no_signal) {
   int percent = failed ? 0 : sound_percent(dbfs);
   uint32_t color = failed ? 0xa855f7 : percent >= 75 ? 0xf04452 : percent >= 45 ? 0xf5b942 : 0x34d399;
   const char *status = failed ? "MIC ERROR" : no_signal ? "NO SIGNAL" : percent >= 75 ? "LOUD" : percent >= 45 ? "MODERATE" : "QUIET";
   if (no_signal) color = 0xa855f7;
   ESP_ERROR_CHECK(bsp_rgb_set((color >> 16 & 255) / 8, (color >> 8 & 255) / 8, (color & 255) / 8));
-  if (lvgl_port_lock(100)) {
-    lv_bar_set_value(bar, percent, LV_ANIM_OFF);
-    lv_obj_set_style_bg_color(bar, lv_color_hex(color), LV_PART_INDICATOR);
-    if (failed) lv_label_set_text(value_label, "-- dBFS");
-    else lv_label_set_text_fmt(value_label, "%.1f dBFS", (double)dbfs);
-    lv_label_set_text(status_label, status);
-    lv_obj_set_style_text_color(status_label, lv_color_hex(color), 0);
-    lvgl_port_unlock();
+  if (!lvgl_port_lock(100)) return false;
+  for (size_t i = 0; i < SPECTRUM_BANDS; ++i) {
+    float level = failed || no_signal ? 0 : fmaxf(0, fminf(1, (band_levels[i] + 72) / 72));
+    // Invalidate old and new bounds when mutating LVGL's retained point storage.
+    lv_obj_invalidate(bars[i]);
+    radial_points(points[i], i, 125 + 65 * level);
+    lv_line_set_points(bars[i], points[i], 2);
   }
+  if (failed) lv_label_set_text(value_label, "--.-");
+  else lv_label_set_text_fmt(value_label, "%.1f", (double)dbfs);
+  lv_label_set_text(status_label, status);
+  lv_obj_set_style_text_color(status_label, lv_color_hex(color), 0);
+  lvgl_port_unlock();
+  return true;
 }
 
 void app_main(void) {
@@ -68,12 +102,15 @@ void app_main(void) {
     puts("SOUND_METER_MIC_ERROR");
     return;
   }
-  puts("SOUND_METER_READY_V2");
+  spectrum_init(&spectrum);
+  puts("SOUND_METER_READY_V3");
   int16_t samples[800]; // 50 ms, reused immediately; never exported.
   float smoothed = -90;
   unsigned blocks = 0;
   unsigned flat_blocks = 0;
   bool window_has_signal = false;
+  unsigned spectrum_frames = 0;
+  int64_t report_start = esp_timer_get_time();
   while (true) {
     int result = esp_codec_dev_read(mic, samples, sizeof(samples));
     if (result != ESP_CODEC_DEV_OK) {
@@ -88,11 +125,24 @@ void app_main(void) {
     flat_blocks = varying ? 0 : flat_blocks < 40 ? flat_blocks + 1 : 40;
     window_has_signal |= varying;
     smoothed = sound_smooth(smoothed, sound_dbfs(samples, 800));
+    float bands[SPECTRUM_BANDS];
+    bool spectrum_ready = spectrum_push(&spectrum, samples, 800, bands);
+    if (spectrum_ready) {
+      for (size_t i = 0; i < SPECTRUM_BANDS; ++i) {
+        band_levels[i] = sound_smooth(band_levels[i], bands[i]);
+      }
+    }
     memset(samples, 0, sizeof(samples));
-    update_ui(smoothed, false, flat_blocks >= 40);
+    if (update_ui(smoothed, false, flat_blocks >= 40) && spectrum_ready) ++spectrum_frames;
     if (++blocks % 100 == 0) {
-      puts("SOUND_METER_RUNNING_V2");
-      puts(window_has_signal ? "SOUND_METER_SIGNAL_V2" : "SOUND_METER_FLAT_V2");
+      puts("SOUND_METER_RUNNING_V3");
+      puts(window_has_signal ? "SOUND_METER_SIGNAL_V3" : "SOUND_METER_FLAT_V3");
+      if (spectrum_frames >= 95) {
+        puts("SPECTRUM_RENDERED_V3");
+        puts(esp_timer_get_time() - report_start <= 6500000 ? "SPECTRUM_TIMING_OK_V3" : "SPECTRUM_TIMING_SLOW_V3");
+      }
+      spectrum_frames = 0;
+      report_start = esp_timer_get_time();
       window_has_signal = false;
     }
     vTaskDelay(pdMS_TO_TICKS(1));
